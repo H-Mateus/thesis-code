@@ -107,8 +107,6 @@ discharge_model_selecter <- function(df, variable) {
 
 
 
-### FUNCTION X ###
-
 # function for perfoming linear regression, glmnet and logistic regression on
 # data, with 10-fold cross validation and a 80-20 training-test data split - PCA
 # has been added to linreg model with a threshold of 0.9
