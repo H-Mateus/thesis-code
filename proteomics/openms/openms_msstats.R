@@ -14,6 +14,8 @@ library(MSstatsTMT) # for analysis
 library(MSstats) # for plotting
 
 file <- "../../../../proteomic_data/knime_outputs/all_fraction_both_runs_itraq_workflow_2020-10-23/both_runs_msstats.csv"
+file <- "../../../../proteomic_data/knime_outputs/mstats_run2.csv"
+file <- "../../../../proteomic_data/knime_outputs/fractions_merged_itraq_workflow/msstatstmt_both_runs_2020-10-27.csv"
 
 output_directory <- "../figures/msstatstmt_plots/"
 print(output_directory)
