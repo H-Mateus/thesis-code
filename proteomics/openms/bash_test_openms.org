@@ -1,0 +1,425 @@
+#+TITLE: OpenMS workflow
+#+PROPERTY: header-args :dir ~/proteomic_data :exports code :results verbatim drawer
+
+* Set directory
+
+Set the directory that contains the mass spec data
+NOTE: Trying to set session to save variables seems to cause emacs to freeze, investigate later
+
+#+begin_src shell
+base_directory=~/proteomic_data
+mzml_files=proteomic_data/wiff_files/mzml_peakpicker
+pwd
+#+end_src
+
+#+RESULTS:
+: /home/mateus/proteomic_data
+
+#+begin_src shell
+echo $mzml_files
+#+end_src
+
+#+RESULTS:
+
+* Conversion of .wiff files
+
+The mass spec provides it output in a proprietary file format (.wiff in this case).
+So first we want to convert the file to an open source format that our subsequent tools can work with
+Here we use the docker container of the ProteoWizard tool =msconvert=.
+Note that we also apply the vendor peak picking algorithm so that our spectra will be centroided
+
+#+BEGIN_SRC sh
+# Note that the docker damon must be running before docker can be used
+# If it isn't running already it can be started with:
+sudo systemctl start docker
+
+sudo docker run -it --rm -v /home/mateus/proteomic_data:/proteomic_data proteowizard/pwiz-skyline-i-agree-to-the-vendor-licenses wine msconvert /proteomic_data/Mateus_iTRAQ_run1_Fr01_4ul.wiff --filter "peakPicking true 1-" -o /proteomic_data/mzml_peakpicker
+#+END_SRC
+
+* OpenMS pipeline
+:PROPERTIES:
+:dir: proteomic_data
+:exports: code
+:END:
+
+This is a test shell script for OpenMS nodes
+
+** Merge fractions
+
+For some reason when running the workflow with individual fraction files the percolator adapter gives an error, so we merge the fractions into one file here
+
+#+begin_src shell
+FileMerger -in $mzml_files/*run1*.mzML* -out $mzml_files/test.mzML -annotate_file_origin -threads 4
+#+end_src
+
+#+RESULTS:
+
+#+begin_src shell :dir ~/proteomic_data/wiff_files/mzml_peakpicker/msconvert_output
+FileMerger -in *run1*.mzML* -out ../fractions_merged_run1_2020_11_02.mzML -annotate_file_origin -threads 4
+FileMerger -in *run2*.mzML* -out ../fractions_merged_run2_2020_11_02.mzML -annotate_file_origin -threads 4
+#+end_src
+
+** Prep database
+
+First create decoy database. Note: here we use the reference human .fasta from uniprot and another .fasta of the enzyme used (pig trypsin in this case) as it is a containment from the sample prep.
+
+#+BEGIN_SRC sh
+DecoyDatabase -enzyme Trypsin -in ~/proteomic_data/uniprot-proteome_UP000005640_human_reference_2020-10-01.fasta ~/proteomic_data/P00761_pig_trypsin_2020-10-01.fasta -out ~/proteomic_data/test_decoy_database.fasta
+#+END_SRC
+
+#+RESULTS:
+
+** Run search engine and annotate results
+
+Here we use our .mzML file which has our spectra and our decoy database of human proteins to run a search which matches the spectra to peptides.
+
+For the fixed modifications Methylthio C is used because of the alkylating agent used during sample prep and the iTRAQ4plex is used because the tags in the iTRAQ protocol modify the N-terminus.
+For the variable modifications, oxidation of M is used as it is very susceptible to oxidation. 
+
+*** MSGFPlus search
+
+NOTE: the MSGFPlusAdapter defaults to using full cleavage (as opposed to semi or none) and "Trypsin/P" as the default enzyme
+#+BEGIN_SRC sh :dir ~/proteomic_data/openms_cmd_outputs
+MSGFPlusAdapter -in ~/proteomic_data/wiff_files/mzml_peakpicker/fractions_merged_run1_2020_11_02.mzML -out msgfplusadapter_search_run1_2020_11_02.idXML -executable ~/Development/OpenMS/THIRDPARTY/All/MSGFPlus/MSGFPlus.jar -database ~/proteomic_data/test_decoy_database.fasta -fixed_modifications "Methylthio (C)" "iTRAQ4plex (N-term)" -variable_modifications "Oxidation (M)" -precursor_mass_tolerance 20 -enzyme Trypsin/P -protocol iTRAQ -instrument high_res -java_memory 15000 -threads 8
+
+MSGFPlusAdapter -in ~/proteomic_data/wiff_files/mzml_peakpicker/fractions_merged_run2_2020_11_02.mzML -out msgfplusadapter_search_run2_2020_11_02.idXML -executable ~/Development/OpenMS/THIRDPARTY/All/MSGFPlus/MSGFPlus.jar -database ~/proteomic_data/test_decoy_database.fasta -fixed_modifications "Methylthio (C)" "iTRAQ4plex (N-term)" -variable_modifications "Oxidation (M)" -precursor_mass_tolerance 20 -enzyme Trypsin/P -protocol iTRAQ -instrument high_res -java_memory 15000 -threads 8
+#+END_SRC
+
+Run 1 console output
+#+begin_example
+
+#+end_example
+
+*** Annotate results
+
+#+BEGIN_SRC sh
+PeptideIndexer -in openms_cmd_outputs/msgfplusadapter_search_run1_2020_11_02.idXML -out openms_cmd_outputs/pepindex_msgfplus_run1.idXML
+PeptideIndexer -in openms_cmd_outputs/msgfplusadapter_search_run2_2020_11_02.idXML -out openms_cmd_outputs/pepindex_msgfplus_run2.idXML
+#+END_SRC
+
+#+BEGIN_SRC sh
+PSMFeatureExtractor -in openms_cmd_outputs/pepindex_msgfplus_run1.idXML -out openms_cmd_outputs/psmfeature_run1.idXML
+PSMFeatureExtractor -in openms_cmd_outputs/pepindex_msgfplus_run2.idXML -out openms_cmd_outputs/psmfeature_run2.idXML
+#+END_SRC
+
+Run 1 console output
+#+begin_example
+Loading input file: openms_cmd_outputs/pepindex_msgfplus_run1.idXML
+MS-GF+ PSM with missing NumMatchedMainIons skipped.
+StdevErrorTop7 is NaN, setting as MeanErrorTop7 instead.
+writing output file: openms_cmd_outputs/psmfeature_run1.idXML
+PSMFeatureExtractor finished successfully!
+PSMFeatureExtractor took 47.60 s (wall), 47.45 s (CPU), 1.43 s (system), 46.02 s (user); Peak Memory Usage: 1646 MB.
+<MS-GF+ PSM with missing NumMatchedMainIons skipped.> occurred 69623 times
+<StdevErrorTop7 is NaN, setting as MeanErrorTop7 instead.> occurred 13 times
+#+end_example
+
+** Peptide level score estimation and filtering
+
+#+begin_src shell
+PercolatorAdapter -in openms_cmd_outputs/psmfeature_run1.idXML -out openms_cmd_outputs/percolator_run1.idXML -percolator_executable ~/Development/OpenMS/THIRDPARTY/Linux/64bit/Percolator/percolator -score_type q-value -enzyme trypsinp -threads 8 -verbose 5
+PercolatorAdapter -in openms_cmd_outputs/psmfeature_run2.idXML -out openms_cmd_outputs/percolator_run2.idXML -percolator_executable ~/Development/OpenMS/THIRDPARTY/Linux/64bit/Percolator/percolator -score_type q-value -enzyme trypsinp -threads 8 -verbose 5
+#+end_src
+
+Run1 console output
+#+begin_example
+Loading input file: openms_cmd_outputs/psmfeature_run1.idXML
+Merging peptide ids.
+Merging protein ids.
+Prepared percolator input.
+PSM-level FDR: All PSMs are returned by percolator. Reannotating all PSMs in input data with percolator output.
+Scores of all other PSMs will be set to 1.0.
+298556 suitable PeptideHits of 336451 PSMs were reannotated.
+PercolatorAdapter finished successfully!
+PercolatorAdapter took 01:50 m (wall), 01:10 m (CPU), 2.71 s (system), 01:07 m (user); Peak Memory Usage: 1710 MB.
+#+end_example
+
+Filter with peptide score 0.05
+This reduces the number of proteins identified by roughly 10 times
+#+begin_src shell
+IDFilter -in openms_cmd_outputs/percolator_run1.idXML -out openms_cmd_outputs/idfilter1_run1.idXML -score:pep 0.05 -threads 4
+IDFilter -in openms_cmd_outputs/percolator_run2.idXML -out openms_cmd_outputs/idfilter1_run2.idXML -score:pep 0.05 -threads 4
+#+end_src
+
+Run1 console output
+#+begin_example
+Filtering by peptide score...
+Removing unreferenced protein hits...
+Before filtering:
+1 identification runs with 110818 proteins,
+336451 spectra identified with 368375 spectrum matches.
+After filtering:
+1 identification runs with 1757 proteins,
+7867 spectra identified with 7953 spectrum matches.
+IDFilter took 44.93 s (wall), 44.82 s (CPU), 0.54 s (system), 44.28 s (user); Peak Memory Usage: 1070 MB.
+#+end_example
+** Isobaric experiment
+
+The merged .mzML file must be sorted by retention time for the IsobaricAnalyzer
+Note that this can use a lot of RAM depending on the file size
+#+begin_src shell
+FileFilter -in wiff_files/mzml_peakpicker/fractions_merged_run1_2020_11_02.mzML -sort -out openms_cmd_outputs/filefilter_rtsort_run1.mzML -threads 4
+FileFilter -in wiff_files/mzml_peakpicker/fractions_merged_run2_2020_11_02.mzML -sort -out openms_cmd_outputs/filefilter_rtsort_run2.mzML -threads 4
+#+end_src
+
+Run 1 console output
+#+begin_example
+Progress of 'loading spectra list':
+-- done [took 01:55 m (CPU), 01:56 m (Wall)] -- 
+Progress of 'loading chromatogram list':
+-- done [took 0.03 s (CPU), 0.04 s (Wall)] -- 
+Progress of 'storing mzML file':
+-- done [took 32.80 s (CPU), 33.24 s (Wall)] -- 
+FileFilter took 02:33 m (wall), 02:31 m (CPU), 17.63 s (system), 02:13 m (user); Peak Memory Usage: 14498 MB.
+#+end_example
+
+#+begin_src shell
+IsobaricAnalyzer -type itraq4plex -in openms_cmd_outputs/filefilter_rtsort_run1.mzML -out openms_cmd_outputs/isoanalse_run1.consensusXML -threads 6
+IsobaricAnalyzer -type itraq4plex -in openms_cmd_outputs/filefilter_rtsort_run2.mzML -out openms_cmd_outputs/isoanalse_run2.consensusXML -threads 6
+#+end_src
+
+Run 1 console output
+Only around 30% of MS level 2 scans had reporter ions?
+#+begin_example
+Progress of 'loading spectra list':
+-- done [took 07:47 m (CPU), 01:24 m (Wall)] -- 
+Progress of 'loading chromatogram list':
+-- done [took 0.11 s (CPU), 0.05 s (Wall)] -- 
+Selecting scans with activation mode: High-energy collision-induced dissociation
+Filtering by MS/MS(/MS) and activation mode:
+  level 2: 372579 scans
+Using MS-level 2 for quantification.
+Calibration stats: Median distance of observed reporter ions m/z to expected position (up to 0.5 Th):
+  ch 114  (~114.111): 0.00197991 Th
+  ch 115  (~115.108): 0.00176064 Th
+  ch 116  (~116.111): 0.00180594 Th
+  ch 117  (~117.114): 0.00175873 Th
+
+IsobaricQuantifier: skipped 125979 of 372579 selected scans due to lack of reporter information:
+IsobaricQuantifier: channels with signal
+  ch 114 : 117074 / 372579 (31%)
+  ch 115 : 121968 / 372579 (32%)
+  ch 116 : 124907 / 372579 (33%)
+  ch 117 : 120317 / 372579 (32%)
+IsobaricAnalyzer took 01:29 m (wall), 07:53 m (CPU), 10.00 s (system), 07:43 m (user); Peak Memory Usage: 14960 MB.
+#+end_example
+
+Assign protein/peptide identifications to features or consensus features.
+#+begin_src shell
+IDMapper -id openms_cmd_outputs/idfilter1_run1.idXML -in openms_cmd_outputs/isoanalse_run1.consensusXML -out openms_cmd_outputs/idmap_run1.consensusXML -rt_tolerance 0.1 -mz_reference precursor -feature:use_centroid_mz false -threads 6
+#+end_src
+
+Run 1 console output
+#+begin_example
+Unassigned peptides: 1746
+Peptides assigned to exactly one feature: 6066
+Peptides assigned to multiple features: 55
+IDMapper took 01:43 m (wall), 01:43 m (CPU), 0.32 s (system), 01:42 m (user); Peak Memory Usage: 264 MB.
+#+end_example
+
+Merge the IDMapper output files
+#+begin_src shell
+FileMerger -in openms_cmd_outputs/idmap_run1.consensusXML openms_cmd_outputs/idmap_run2.consensusXML -out openms_cmd_outputs/idmap_merged.consensusXML -annotate_file_origin -threads 4
+#+end_src
+
+** Score estimation and protein inference
+
+Inference with Epifany
+#+begin_src shell
+Epifany -in openms_cmd_outputs/idmap_merged.consensusXML -out openms_cmd_outputs/epifany_2020-11-03.consensusXML -greedy_group_resolution remove_proteins_wo_evidence -algorithm:keep_best_PSM_only false
+#+end_src
+
+Console output
+#+begin_example
+Loading input...
+Loading took 18.96 s (wall), 18.94 s (CPU), 0.21 s (system), 18.73 s (user)
+Building graph on 461879 features, 4103 unassigned spectra (if chosen) and 2401 proteins.
+Progress of 'Building graph...':
+-- done [took 0.02 s (CPU), 0.02 s (Wall)] -- 
+Found 848 connected components.
+Testing 45 param combinations.
+Evaluating: 0.1 0.01 0.2
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.303596 and roc100 = 0.870449
+Evaluating: 0.1 0.01 0.5
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.147921 and roc100 = 0.877258
+Evaluating: 0.1 0.01 0.7
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.105843 and roc100 = 0.864563
+Evaluating: 0.1 0.2 0.2
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.352583 and roc100 = 0.872189
+Evaluating: 0.1 0.2 0.5
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.182648 and roc100 = 0.874216
+Evaluating: 0.1 0.2 0.7
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.118858 and roc100 = 0.860282
+Evaluating: 0.1 0.4 0.2
+Skipping improbable parameter combination.. 
+Evaluating: 0.1 0.4 0.5
+Evaluating: 0.1 0.4 0.7
+Evaluating: 0.25 0.01 0.2
+<Skipping improbable parameter combination.. > occurred 3 times
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.301466 and roc100 = 0.859038
+Evaluating: 0.25 0.01 0.5
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.144472 and roc100 = 0.85516
+Evaluating: 0.25 0.01 0.7
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.102125 and roc100 = 0.863743
+Evaluating: 0.25 0.2 0.2
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.336045 and roc100 = 0.864928
+Evaluating: 0.25 0.2 0.5
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.16771 and roc100 = 0.863754
+Evaluating: 0.25 0.2 0.7
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.111351 and roc100 = 0.872732
+Evaluating: 0.25 0.4 0.2
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.359094 and roc100 = 0.870529
+Evaluating: 0.25 0.4 0.5
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.187355 and roc100 = 0.86816
+Evaluating: 0.25 0.4 0.7
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.120389 and roc100 = 0.872554
+Evaluating: 0.5 0.01 0.2
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.30699 and roc100 = 0.845499
+Evaluating: 0.5 0.01 0.5
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.143512 and roc100 = 0.829597
+Evaluating: 0.5 0.01 0.7
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.10252 and roc100 = 0.797026
+Evaluating: 0.5 0.2 0.2
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.331642 and roc100 = 0.849587
+Evaluating: 0.5 0.2 0.5
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.160818 and roc100 = 0.835746
+Evaluating: 0.5 0.2 0.7
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.109541 and roc100 = 0.799827
+Evaluating: 0.5 0.4 0.2
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.350949 and roc100 = 0.847686
+Evaluating: 0.5 0.4 0.5
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.176851 and roc100 = 0.843458
+Evaluating: 0.5 0.4 0.7
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.116701 and roc100 = 0.78856
+Evaluating: 0.65 0.01 0.2
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.311668 and roc100 = 0.849191
+Evaluating: 0.65 0.01 0.5
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.143147 and roc100 = 0.817144
+Evaluating: 0.65 0.01 0.7
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.103271 and roc100 = 0.795492
+Evaluating: 0.65 0.2 0.2
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.332946 and roc100 = 0.853143
+Evaluating: 0.65 0.2 0.5
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.15861 and roc100 = 0.825615
+Evaluating: 0.65 0.2 0.7
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.108865 and roc100 = 0.786783
+Evaluating: 0.65 0.4 0.2
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.349978 and roc100 = 0.859646
+Evaluating: 0.65 0.4 0.5
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.172525 and roc100 = 0.806592
+Evaluating: 0.65 0.4 0.7
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.11608 and roc100 = 0.78118
+Evaluating: 0.8 0.01 0.2
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.315978 and roc100 = 0.837223
+Evaluating: 0.8 0.01 0.5
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.141219 and roc100 = 0.788013
+Evaluating: 0.8 0.01 0.7
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.103335 and roc100 = 0.755293
+Evaluating: 0.8 0.2 0.2
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.334996 and roc100 = 0.842352
+Evaluating: 0.8 0.2 0.5
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.155173 and roc100 = 0.783587
+Evaluating: 0.8 0.2 0.7
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.10869 and roc100 = 0.745939
+Evaluating: 0.8 0.4 0.2
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.349624 and roc100 = 0.837213
+Evaluating: 0.8 0.4 0.5
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.169749 and roc100 = 0.787938
+Evaluating: 0.8 0.4 0.7
+Evaluation of protein probabilities: Difference estimated vs. T-D FDR = 0.11615 and roc100 = 0.735015
+Best params found at a=0.25, b=0.01, g=0.7
+Running with best parameters:
+Progress of 'Annotating indistinguishable proteins...':
+-- done [took 0.00 s (CPU), 0.00 s (Wall)] -- 
+Progress of 'Resolving graph...':
+-- done [took 0.00 s (CPU), 0.00 s (Wall)] -- 
+Annotated 498 indist. protein groups.
+Inference total took 17.94 s (wall), 17.91 s (CPU), 0.00 s (system), 17.91 s (user)
+Postprocessing: Removing proteins without associated evidence...
+ConsensusXMLFile::store():  found 1 invalid unique ids
+Epifany took 42.01 s (wall), 41.95 s (CPU), 0.54 s (system), 41.41 s (user); Peak Memory Usage: 500 MB.
+#+end_example
+
+Remove decoys and ProteinGroup level FDR (0.05)
+#+begin_src shell
+IDFilter -in openms_cmd_outputs/epifany_2020-11-03.consensusXML -out openms_cmd_outputs/idfilter2.consensusXML -score:protgroup 0.05 -remove_decoys -threads 4
+#+end_src
+
+Console output
+#+begin_example
+Removing decoy hits...
+Filtering by protein group score...
+Removing unreferenced protein hits...
+Warning: While updating indistinguishable proteins, some proteins were removed from groups that are still present. The new grouping (especially the group probabilities) may not be completely valid any more.
+Before filtering:
+1 identification runs with 2817 proteins,
+16239 spectra identified with 16412 spectrum matches.
+After filtering:
+1 identification runs with 1213 proteins,
+15552 spectra identified with 15634 spectrum matches.
+ConsensusXMLFile::store():  found 1 invalid unique ids
+IDFilter took 24.25 s (wall), 24.16 s (CPU), 0.59 s (system), 23.57 s (user); Peak Memory Usage: 498 MB.
+#+end_example
+
+#+begin_src shell
+IDConflictResolver -in openms_cmd_outputs/idfilter2.consensusXML -out openms_cmd_outputs/idconflictresolve_merged.consensusXML -threads 4
+#+end_src
+
+Console output
+#+begin_example
+ConsensusXMLFile::store():  found 1 invalid unique ids
+IDConflictResolver took 24.67 s (wall), 24.58 s (CPU), 0.57 s (system), 24.01 s (user); Peak Memory Usage: 536 MB.
+#+end_example
+** Outputs
+*** MSstatsTMT output
+
+#+begin_src shell
+MSstatsConverter -in openms_cmd_outputs/idconflictresolve_merged.consensusXML -in_design experimental_design/fractions_merged_both_runs_2020-11-03.tsv -method ISO -out openms_cmd_outputs/workflow_results/msstatstmt_2020-11-03.csv 
+#+end_src
+
+* try workflow with openms example data
+
+NOTE: decoys already present in .fasta
++ This workflow works with the percolator adapter
+  + need to compare files to find difference that could be causing issue
+    + The accession in the .fasta files is different. The ones in our data are
+      the accessions used by uniprot, and contain a lot of information, but I don't know what the accessions in
+      their example data are.
+    +  noticed that from the point of the search there doesn't seem to be any
+      actual scoring from the engine, the difference can be seen in the end of
+      the search adaptor output.
+#+BEGIN_SRC sh
+CometAdapter -in ~/Documents/openms_example_data/Example_Data/B1.mzML -out openms_example_data.idXML -comet_executable ~/Development/OpenMS/THIRDPARTY/Linux/64bit/Comet/comet.exe -database ~/Documents/openms_example_data/Example_Data/iPRG2016_shuff.fasta -precursor_mass_tolerance 20 -enzyme Trypsin -missed_cleavages 1 -fragment_mass_tolerance 0.01 -fixed_modifications "Carbamidomethyl (C)" -variable_modifications "Oxidation (M)" -threads 8
+#+END_SRC
+
++ again the "accession" field is different
+#+BEGIN_SRC sh
+IDMerger -in openms_example_data.idXML -out idmerger_example_test.idXML -annotate_file_origin -merge_proteins_add_PSMs
+#+END_SRC
+
+
++ at this stage the "accession" field is different in our data compared to the
+  example data. In our data the accession looks like what I'm used to an
+  accession score looking like, but in the example it looks more like the
+  "value" field from the PSMFeatureExtractor output.
+#+BEGIN_SRC sh
+PeptideIndexer -in idmerger_example_test.idXML -out pepindex_example.idXML
+#+END_SRC
+
++ At this stage the "value" field in the .mzid output of PSMFeatureExtractor in
+  our data is the same as the accession, but in the example data is looks like
+  it could be a search engine score.
+#+BEGIN_SRC sh
+PSMFeatureExtractor -in pepindex_example.idXML -out psmfeature_example.mzid
+#+END_SRC
+
+#+BEGIN_SRC shell
+PercolatorAdapter -in psmfeature_example.mzid -out percadap_test.idXML -percolator_executable /home/mateus/Development/OpenMS/THIRDPARTY/Linux/64bit/Percolator/percolator -score_type pep -threads 8
+#+END_SRC
+
+* MSstats
+
+Run MSstats converter. Needs appropriate experimental design file to detail experimental details
+#+BEGIN_SRC shell
+MSstatsConverter -in proteomic_data/filefilter_run2.consensusXML -in_design proteomic_data/knime_ExperimentalDesign_fractions_merged.tsv -out proteomic_data/knime_outputs/run2_mstats_cmd.csv -method ISO
+#+END_SRC
