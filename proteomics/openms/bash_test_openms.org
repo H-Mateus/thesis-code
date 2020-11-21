@@ -1,5 +1,5 @@
 #+TITLE: OpenMS workflow
-#+PROPERTY: header-args :dir ~/proteomic_data :exports code :results verbatim drawer
+#+PROPERTY: header-args :dir ~/proteomic_data :exports code :results verbatim drawer :tangle openms_cmd_2020-11-10.sh
 
 * Set directory
 
@@ -43,22 +43,35 @@ sudo docker run -it --rm -v /home/mateus/proteomic_data:/proteomic_data proteowi
 :END:
 
 This is a test shell script for OpenMS nodes
+Be aware that depending on the file sizes, some of these nodes can use a significant amount of RAM
 
+NOTE: for protein quantification output:
++ It is the intensity of the signal coming from the ions of the fragmented tag for each channel. This gives peptide intensities for each file and each channel. And they are summarized for proteins later on.
 ** Merge fractions
 
 For some reason when running the workflow with individual fraction files the percolator adapter gives an error, so we merge the fractions into one file here
 
-#+begin_src shell
-FileMerger -in $mzml_files/*run1*.mzML* -out $mzml_files/test.mzML -annotate_file_origin -threads 4
-#+end_src
-
-#+RESULTS:
-
 #+begin_src shell :dir ~/proteomic_data/wiff_files/mzml_peakpicker/msconvert_output
-FileMerger -in *run1*.mzML* -out ../fractions_merged_run1_2020_11_02.mzML -annotate_file_origin -threads 4
-FileMerger -in *run2*.mzML* -out ../fractions_merged_run2_2020_11_02.mzML -annotate_file_origin -threads 4
+FileMerger -in *run1*.mzML* -out ../fractions_merged_run1_2020_11_02.mzML -threads 4
+FileMerger -in *run2*.mzML* -out ../fractions_merged_run2_2020_11_02.mzML -threads 4
 #+end_src
 
+The merged .mzML file must be sorted by retention time for the IsobaricAnalyzer
+#+begin_src shell
+FileFilter -in wiff_files/mzml_peakpicker/fractions_merged_run1_2020_11_02.mzML -sort -out openms_cmd_outputs/merged_sorted_by_rt/fractions_merged_run1_2020_11_02.mzML -threads 4
+FileFilter -in wiff_files/mzml_peakpicker/fractions_merged_run2_2020_11_02.mzML -sort -out openms_cmd_outputs/merged_sorted_by_rt/fractions_merged_run2_2020_11_02.mzML -threads 4
+#+end_src
+
+Run 1 console output
+#+begin_example
+Progress of 'loading spectra list':
+-- done [took 01:55 m (CPU), 01:56 m (Wall)] -- 
+Progress of 'loading chromatogram list':
+-- done [took 0.03 s (CPU), 0.04 s (Wall)] -- 
+Progress of 'storing mzML file':
+-- done [took 32.80 s (CPU), 33.24 s (Wall)] -- 
+FileFilter took 02:33 m (wall), 02:31 m (CPU), 17.63 s (system), 02:13 m (user); Peak Memory Usage: 14498 MB.
+#+end_example
 ** Prep database
 
 First create decoy database. Note: here we use the reference human .fasta from uniprot and another .fasta of the enzyme used (pig trypsin in this case) as it is a containment from the sample prep.
@@ -79,27 +92,83 @@ For the variable modifications, oxidation of M is used as it is very susceptible
 *** MSGFPlus search
 
 NOTE: the MSGFPlusAdapter defaults to using full cleavage (as opposed to semi or none) and "Trypsin/P" as the default enzyme
-#+BEGIN_SRC sh :dir ~/proteomic_data/openms_cmd_outputs
-MSGFPlusAdapter -in ~/proteomic_data/wiff_files/mzml_peakpicker/fractions_merged_run1_2020_11_02.mzML -out msgfplusadapter_search_run1_2020_11_02.idXML -executable ~/Development/OpenMS/THIRDPARTY/All/MSGFPlus/MSGFPlus.jar -database ~/proteomic_data/test_decoy_database.fasta -fixed_modifications "Methylthio (C)" "iTRAQ4plex (N-term)" -variable_modifications "Oxidation (M)" -precursor_mass_tolerance 20 -enzyme Trypsin/P -protocol iTRAQ -instrument high_res -java_memory 15000 -threads 8
+Search takes around 2.5 hours on my laptop
+#+BEGIN_SRC sh 
+MSGFPlusAdapter -in /home/mateus/proteomic_data/openms_cmd_outputs/merged_sorted_by_rt/fractions_merged_run1_2020_11_02.mzML -out openms_cmd_outputs/search_engine/msgfplus/fractions_merged_run1_2020_11_02.idXML -executable ~/Development/OpenMS/THIRDPARTY/All/MSGFPlus/MSGFPlus.jar -database ~/proteomic_data/test_decoy_database.fasta -fixed_modifications "Methylthio (C)" "iTRAQ4plex (N-term)" -variable_modifications "Oxidation (M)" -precursor_mass_tolerance 20 -enzyme Trypsin/P -protocol iTRAQ -instrument high_res -java_memory 16000 -threads 8
 
-MSGFPlusAdapter -in ~/proteomic_data/wiff_files/mzml_peakpicker/fractions_merged_run2_2020_11_02.mzML -out msgfplusadapter_search_run2_2020_11_02.idXML -executable ~/Development/OpenMS/THIRDPARTY/All/MSGFPlus/MSGFPlus.jar -database ~/proteomic_data/test_decoy_database.fasta -fixed_modifications "Methylthio (C)" "iTRAQ4plex (N-term)" -variable_modifications "Oxidation (M)" -precursor_mass_tolerance 20 -enzyme Trypsin/P -protocol iTRAQ -instrument high_res -java_memory 15000 -threads 8
+MSGFPlusAdapter -in /home/mateus/proteomic_data/openms_cmd_outputs/merged_sorted_by_rt/fractions_merged_run2_2020_11_02.mzML -out openms_cmd_outputs/search_engine/msgfplus/fractions_merged_run2_2020_11_02.idXML -executable ~/Development/OpenMS/THIRDPARTY/All/MSGFPlus/MSGFPlus.jar -database ~/proteomic_data/test_decoy_database.fasta -fixed_modifications "Methylthio (C)" "iTRAQ4plex (N-term)" -variable_modifications "Oxidation (M)" -precursor_mass_tolerance 20 -enzyme Trypsin/P -protocol iTRAQ -instrument high_res -java_memory 16000 -threads 8
 #+END_SRC
 
 Run 1 console output
 #+begin_example
-
+Running MSGFPlus search...
+No DatabaseName element found, use read in results at own risk.
+missedCleavages has a negative value. Assuming unlimited and setting it to 1000.
+MSGFPlusAdapter took 02:41:29 h (wall), 07:31 m (CPU), 8.07 s (system), 07:23 m (user); Peak Memory Usage: 18188 MB.
 #+end_example
 
 *** Annotate results
 
 #+BEGIN_SRC sh
-PeptideIndexer -in openms_cmd_outputs/msgfplusadapter_search_run1_2020_11_02.idXML -out openms_cmd_outputs/pepindex_msgfplus_run1.idXML
-PeptideIndexer -in openms_cmd_outputs/msgfplusadapter_search_run2_2020_11_02.idXML -out openms_cmd_outputs/pepindex_msgfplus_run2.idXML
+PeptideIndexer -in openms_cmd_outputs/search_engine/msgfplus/fractions_merged_run1_2020_11_02.idXML -out openms_cmd_outputs/peptide_indexer/fractions_merged_run1_2020_11_02.idXML
+PeptideIndexer -in openms_cmd_outputs/search_engine/msgfplus/fractions_merged_run2_2020_11_02.idXML -out openms_cmd_outputs/peptide_indexer/fractions_merged_run2_2020_11_02.idXML
 #+END_SRC
 
+Run 1 console output
+#+begin_example
+Progress of 'Loading idXML':
+-- done [took 31.90 s (CPU), 32.04 s (Wall)] -- 
+Automatically deriving DB from meta data ...DB: /home/mateus/proteomic_data/test_decoy_database.fasta
+Using prefix decoy string 'DECOY_'
+Info: using 'Trypsin/P' as enzyme (obtained from idXML) for digestion.
+Peptide identification engine: MS-GF+
+Enzyme: Trypsin/P
+Info: using 'full' as enzyme specificity (obtained from idXML) for digestion.
+Progress of 'Load first DB chunk':
+-- done [took 0.46 s (CPU), 0.46 s (Wall)] -- 
+Mapping 368375 peptides to 150150 proteins.
+Searching with up to 3 ambiguous amino acid(s) and 0 mismatch(es)!
+Building trie ... done (1s)
+Progress of 'Aho-Corasick':
+-- done [took 7.17 s (CPU), 7.18 s (Wall)] -- 
+Merge took: 0.05 s (wall), 0.05 s (CPU), 0.00 s (system), 0.05 s (user)
+Memory usage (Aho-Corasick): 621 MB (working set delta), 642 MB (peak working set delta)
+
+
+Aho-Corasick done:
+  found 837742 hits for 368375 of 368375 peptides.
+Peptide hits passing enzyme filter: 837742
+     ... rejected by enzyme filter: 80201
+-----------------------------------
+Peptide statistics
+
+  unmatched                : 0 (0 %)
+  target/decoy:
+    match to target DB only: 181001 (49 %)
+    match to decoy DB only : 178201 (48 %)
+    match to both          : 9173 (2 %)
+
+  mapping to proteins:
+    no match (to 0 protein)         : 0
+    unique match (to 1 protein)     : 179939
+    non-unique match (to >1 protein): 188436
+-----------------------------------
+Protein statistics
+
+  total proteins searched: 150150
+  matched proteins       : 110818 (110818 new)
+  matched target proteins: 55153 (49 %)
+  matched decoy proteins : 55665 (50 %)
+  orphaned proteins      : 0 (all removed)
+-----------------------------------
+Progress of 'Storing idXML':
+-- done [took 10.02 s (CPU), 10.15 s (Wall)] -- 
+PeptideIndexer took 54.51 s (wall), 54.23 s (CPU), 1.67 s (system), 52.56 s (user); Peak Memory Usage: 1657 MB.
+#+end_example
+
 #+BEGIN_SRC sh
-PSMFeatureExtractor -in openms_cmd_outputs/pepindex_msgfplus_run1.idXML -out openms_cmd_outputs/psmfeature_run1.idXML
-PSMFeatureExtractor -in openms_cmd_outputs/pepindex_msgfplus_run2.idXML -out openms_cmd_outputs/psmfeature_run2.idXML
+PSMFeatureExtractor -in openms_cmd_outputs/peptide_indexer/fractions_merged_run1_2020_11_02.idXML -out openms_cmd_outputs/psm_feature_extractor/fractions_merged_run1_2020_11_02.idXML
+PSMFeatureExtractor -in openms_cmd_outputs/peptide_indexer/fractions_merged_run2_2020_11_02.idXML -out openms_cmd_outputs/psm_feature_extractor/fractions_merged_run2_2020_11_02.idXML
 #+END_SRC
 
 Run 1 console output
@@ -117,8 +186,8 @@ PSMFeatureExtractor took 47.60 s (wall), 47.45 s (CPU), 1.43 s (system), 46.02 s
 ** Peptide level score estimation and filtering
 
 #+begin_src shell
-PercolatorAdapter -in openms_cmd_outputs/psmfeature_run1.idXML -out openms_cmd_outputs/percolator_run1.idXML -percolator_executable ~/Development/OpenMS/THIRDPARTY/Linux/64bit/Percolator/percolator -score_type q-value -enzyme trypsinp -threads 8 -verbose 5
-PercolatorAdapter -in openms_cmd_outputs/psmfeature_run2.idXML -out openms_cmd_outputs/percolator_run2.idXML -percolator_executable ~/Development/OpenMS/THIRDPARTY/Linux/64bit/Percolator/percolator -score_type q-value -enzyme trypsinp -threads 8 -verbose 5
+PercolatorAdapter -in openms_cmd_outputs/psm_feature_extractor/fractions_merged_run1_2020_11_02.idXML -out openms_cmd_outputs/percolator_adapter/fractions_merged_run1_2020_11_02.idXML -percolator_executable ~/Development/OpenMS/THIRDPARTY/Linux/64bit/Percolator/percolator -score_type q-value -enzyme trypsinp -threads 8 -verbose 5
+PercolatorAdapter -in openms_cmd_outputs/psm_feature_extractor/fractions_merged_run2_2020_11_02.idXML -out openms_cmd_outputs/percolator_adapter/fractions_merged_run2_2020_11_02.idXML -percolator_executable ~/Development/OpenMS/THIRDPARTY/Linux/64bit/Percolator/percolator -score_type q-value -enzyme trypsinp -threads 8 -verbose 5
 #+end_src
 
 Run1 console output
@@ -137,8 +206,8 @@ PercolatorAdapter took 01:50 m (wall), 01:10 m (CPU), 2.71 s (system), 01:07 m (
 Filter with peptide score 0.05
 This reduces the number of proteins identified by roughly 10 times
 #+begin_src shell
-IDFilter -in openms_cmd_outputs/percolator_run1.idXML -out openms_cmd_outputs/idfilter1_run1.idXML -score:pep 0.05 -threads 4
-IDFilter -in openms_cmd_outputs/percolator_run2.idXML -out openms_cmd_outputs/idfilter1_run2.idXML -score:pep 0.05 -threads 4
+IDFilter -in openms_cmd_outputs/percolator_adapter/fractions_merged_run1_2020_11_02.idXML -out openms_cmd_outputs/idfilter_pep/fractions_merged_run1_2020_11_02.idXML -score:pep 0.05 -threads 4
+IDFilter -in openms_cmd_outputs/percolator_adapter/fractions_merged_run2_2020_11_02.idXML -out openms_cmd_outputs/idfilter_pep/fractions_merged_run2_2020_11_02.idXML -score:pep 0.05 -threads 4
 #+end_src
 
 Run1 console output
@@ -155,27 +224,10 @@ IDFilter took 44.93 s (wall), 44.82 s (CPU), 0.54 s (system), 44.28 s (user); Pe
 #+end_example
 ** Isobaric experiment
 
-The merged .mzML file must be sorted by retention time for the IsobaricAnalyzer
-Note that this can use a lot of RAM depending on the file size
-#+begin_src shell
-FileFilter -in wiff_files/mzml_peakpicker/fractions_merged_run1_2020_11_02.mzML -sort -out openms_cmd_outputs/filefilter_rtsort_run1.mzML -threads 4
-FileFilter -in wiff_files/mzml_peakpicker/fractions_merged_run2_2020_11_02.mzML -sort -out openms_cmd_outputs/filefilter_rtsort_run2.mzML -threads 4
-#+end_src
-
-Run 1 console output
-#+begin_example
-Progress of 'loading spectra list':
--- done [took 01:55 m (CPU), 01:56 m (Wall)] -- 
-Progress of 'loading chromatogram list':
--- done [took 0.03 s (CPU), 0.04 s (Wall)] -- 
-Progress of 'storing mzML file':
--- done [took 32.80 s (CPU), 33.24 s (Wall)] -- 
-FileFilter took 02:33 m (wall), 02:31 m (CPU), 17.63 s (system), 02:13 m (user); Peak Memory Usage: 14498 MB.
-#+end_example
 
 #+begin_src shell
-IsobaricAnalyzer -type itraq4plex -in openms_cmd_outputs/filefilter_rtsort_run1.mzML -out openms_cmd_outputs/isoanalse_run1.consensusXML -threads 6
-IsobaricAnalyzer -type itraq4plex -in openms_cmd_outputs/filefilter_rtsort_run2.mzML -out openms_cmd_outputs/isoanalse_run2.consensusXML -threads 6
+IsobaricAnalyzer -type itraq4plex -in openms_cmd_outputs/merged_sorted_by_rt/fractions_merged_run1_2020_11_02.mzML -out openms_cmd_outputs/isobaric_analyzer/fractions_merged_run1_2020_11_02.consensusXML -threads 6
+IsobaricAnalyzer -type itraq4plex -in openms_cmd_outputs/merged_sorted_by_rt/fractions_merged_run2_2020_11_02.mzML -out openms_cmd_outputs/isobaric_analyzer/fractions_merged_run2_2020_11_02.consensusXML -threads 6
 #+end_src
 
 Run 1 console output
@@ -206,7 +258,8 @@ IsobaricAnalyzer took 01:29 m (wall), 07:53 m (CPU), 10.00 s (system), 07:43 m (
 
 Assign protein/peptide identifications to features or consensus features.
 #+begin_src shell
-IDMapper -id openms_cmd_outputs/idfilter1_run1.idXML -in openms_cmd_outputs/isoanalse_run1.consensusXML -out openms_cmd_outputs/idmap_run1.consensusXML -rt_tolerance 0.1 -mz_reference precursor -feature:use_centroid_mz false -threads 6
+IDMapper -id openms_cmd_outputs/idfilter_pep/fractions_merged_run1_2020_11_02.idXML -in openms_cmd_outputs/isoanalse_run1.consensusXML -out openms_cmd_outputs/id_mapper/fractions_merged_run1_2020_11_02.consensusXML -rt_tolerance 0.1 -mz_reference precursor -feature:use_centroid_mz false -threads 6
+IDMapper -id openms_cmd_outputs/idfilter_pep/fractions_merged_run2_2020_11_02.idXML -in openms_cmd_outputs/isoanalse_run2.consensusXML -out openms_cmd_outputs/id_mapper/fractions_merged_run2_2020_11_02.consensusXML -rt_tolerance 0.1 -mz_reference precursor -feature:use_centroid_mz false -threads 6
 #+end_src
 
 Run 1 console output
@@ -219,14 +272,14 @@ IDMapper took 01:43 m (wall), 01:43 m (CPU), 0.32 s (system), 01:42 m (user); Pe
 
 Merge the IDMapper output files
 #+begin_src shell
-FileMerger -in openms_cmd_outputs/idmap_run1.consensusXML openms_cmd_outputs/idmap_run2.consensusXML -out openms_cmd_outputs/idmap_merged.consensusXML -annotate_file_origin -threads 4
+FileMerger -in openms_cmd_outputs/id_mapper/fractions_merged_run1_2020_11_02.consensusXML openms_cmd_outputs/id_mapper/fractions_merged_run2_2020_11_02.consensusXML -out openms_cmd_outputs/file_merge/file_merged_2020-11-02.consensusXML -annotate_file_origin -append_method append_cols -threads 4
 #+end_src
 
 ** Score estimation and protein inference
 
 Inference with Epifany
 #+begin_src shell
-Epifany -in openms_cmd_outputs/idmap_merged.consensusXML -out openms_cmd_outputs/epifany_2020-11-03.consensusXML -greedy_group_resolution remove_proteins_wo_evidence -algorithm:keep_best_PSM_only false
+Epifany -in openms_cmd_outputs/file_merge/file_merged_2020-11-02.consensusXML -out openms_cmd_outputs/epifany/file_merge_2020-11-02.consensusXML -greedy_group_resolution remove_proteins_wo_evidence -algorithm:keep_best_PSM_only false
 #+end_src
 
 Console output
@@ -342,7 +395,7 @@ Epifany took 42.01 s (wall), 41.95 s (CPU), 0.54 s (system), 41.41 s (user); Pea
 
 Remove decoys and ProteinGroup level FDR (0.05)
 #+begin_src shell
-IDFilter -in openms_cmd_outputs/epifany_2020-11-03.consensusXML -out openms_cmd_outputs/idfilter2.consensusXML -score:protgroup 0.05 -remove_decoys -threads 4
+IDFilter -in openms_cmd_outputs/epifany/file_merge_2020-11-02.consensusXML -out openms_cmd_outputs/idfilter_prot/file_merge_2020-11-02.consensusXML -score:protgroup 0.05 -remove_decoys -threads 4
 #+end_src
 
 Console output
@@ -362,7 +415,7 @@ IDFilter took 24.25 s (wall), 24.16 s (CPU), 0.59 s (system), 23.57 s (user); Pe
 #+end_example
 
 #+begin_src shell
-IDConflictResolver -in openms_cmd_outputs/idfilter2.consensusXML -out openms_cmd_outputs/idconflictresolve_merged.consensusXML -threads 4
+IDConflictResolver -in openms_cmd_outputs/idfilter_prot/file_merge_2020-11-02.consensusXML -out openms_cmd_outputs/id_conflict_resolver/file_merge_2020-11-02.consensusXML -threads 4
 #+end_src
 
 Console output
@@ -373,53 +426,17 @@ IDConflictResolver took 24.67 s (wall), 24.58 s (CPU), 0.57 s (system), 24.01 s 
 ** Outputs
 *** MSstatsTMT output
 
+For some reason, the experimental design file needs the spectra to be named "filefilter_rtsort_run1.mzML" even though the file used for the search was named "fractions_merged_run1_2020_11_02.mzML"
+Maybe there's some sort of caching, that's the name of a earlier file I used?
 #+begin_src shell
-MSstatsConverter -in openms_cmd_outputs/idconflictresolve_merged.consensusXML -in_design experimental_design/fractions_merged_both_runs_2020-11-03.tsv -method ISO -out openms_cmd_outputs/workflow_results/msstatstmt_2020-11-03.csv 
+MSstatsConverter -in openms_cmd_outputs/id_conflict_resolver/file_merge_2020-11-02.consensusXML -in_design experimental_design/fractions_merged_both_runs_2020-11-03.tsv -method ISO -out openms_cmd_outputs/workflow_results/msstatstmt_2020-11-03.csv 
+#+end_src
+*** Protein quantification
+#+begin_src shell
+ProteinQuantifier -in openms_cmd_outputs/id_conflict_resolver/file_merge_2020-11-02.consensusXML -design experimental_design/fractions_merged_both_runs_2020-11-03.tsv -out openms_cmd_outputs/workflow_results/protein_qunatifier_2020-11-03.csv -ratios
+#+end_src
+*** Peptide quantification
+#+begin_src shell
+
 #+end_src
 
-* try workflow with openms example data
-
-NOTE: decoys already present in .fasta
-+ This workflow works with the percolator adapter
-  + need to compare files to find difference that could be causing issue
-    + The accession in the .fasta files is different. The ones in our data are
-      the accessions used by uniprot, and contain a lot of information, but I don't know what the accessions in
-      their example data are.
-    +  noticed that from the point of the search there doesn't seem to be any
-      actual scoring from the engine, the difference can be seen in the end of
-      the search adaptor output.
-#+BEGIN_SRC sh
-CometAdapter -in ~/Documents/openms_example_data/Example_Data/B1.mzML -out openms_example_data.idXML -comet_executable ~/Development/OpenMS/THIRDPARTY/Linux/64bit/Comet/comet.exe -database ~/Documents/openms_example_data/Example_Data/iPRG2016_shuff.fasta -precursor_mass_tolerance 20 -enzyme Trypsin -missed_cleavages 1 -fragment_mass_tolerance 0.01 -fixed_modifications "Carbamidomethyl (C)" -variable_modifications "Oxidation (M)" -threads 8
-#+END_SRC
-
-+ again the "accession" field is different
-#+BEGIN_SRC sh
-IDMerger -in openms_example_data.idXML -out idmerger_example_test.idXML -annotate_file_origin -merge_proteins_add_PSMs
-#+END_SRC
-
-
-+ at this stage the "accession" field is different in our data compared to the
-  example data. In our data the accession looks like what I'm used to an
-  accession score looking like, but in the example it looks more like the
-  "value" field from the PSMFeatureExtractor output.
-#+BEGIN_SRC sh
-PeptideIndexer -in idmerger_example_test.idXML -out pepindex_example.idXML
-#+END_SRC
-
-+ At this stage the "value" field in the .mzid output of PSMFeatureExtractor in
-  our data is the same as the accession, but in the example data is looks like
-  it could be a search engine score.
-#+BEGIN_SRC sh
-PSMFeatureExtractor -in pepindex_example.idXML -out psmfeature_example.mzid
-#+END_SRC
-
-#+BEGIN_SRC shell
-PercolatorAdapter -in psmfeature_example.mzid -out percadap_test.idXML -percolator_executable /home/mateus/Development/OpenMS/THIRDPARTY/Linux/64bit/Percolator/percolator -score_type pep -threads 8
-#+END_SRC
-
-* MSstats
-
-Run MSstats converter. Needs appropriate experimental design file to detail experimental details
-#+BEGIN_SRC shell
-MSstatsConverter -in proteomic_data/filefilter_run2.consensusXML -in_design proteomic_data/knime_ExperimentalDesign_fractions_merged.tsv -out proteomic_data/knime_outputs/run2_mstats_cmd.csv -method ISO
-#+END_SRC
